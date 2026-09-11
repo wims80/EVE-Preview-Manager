@@ -557,6 +557,7 @@ impl<'a> ThumbnailRenderer<'a> {
     /// # Arguments
     /// * `focused` - If true, draws the border. If false, clears the border area.
     /// * `skipped` - If true, draws the skipped indicator (diagonal red lines).
+    #[allow(clippy::too_many_arguments)]
     pub fn border(
         &self,
         display_config: &DisplayConfig,
@@ -565,6 +566,7 @@ impl<'a> ThumbnailRenderer<'a> {
         focused: bool,
         skipped: bool,
         font_renderer: &FontRenderer,
+        alert: Option<super::alert::AlertVisual>,
     ) -> Result<()> {
         self.overlay.draw_border(
             display_config,
@@ -573,6 +575,7 @@ impl<'a> ThumbnailRenderer<'a> {
             focused,
             skipped,
             font_renderer,
+            alert,
         )?;
 
         self.overlay(character_name, dimensions)
@@ -588,9 +591,15 @@ impl<'a> ThumbnailRenderer<'a> {
         character_name: &str,
         dimensions: Dimensions,
         font_renderer: &FontRenderer,
+        alert: Option<super::alert::AlertVisual>,
     ) -> Result<()> {
-        self.overlay
-            .draw_minimized(display_config, character_name, dimensions, font_renderer)?;
+        self.overlay.draw_minimized(
+            display_config,
+            character_name,
+            dimensions,
+            font_renderer,
+            alert,
+        )?;
 
         // Explicitly clear background to black using fill_static.
         // We cannot use self.update() here because it calls capture(), which correctly skips
@@ -611,38 +620,8 @@ impl<'a> ThumbnailRenderer<'a> {
         Ok(())
     }
 
-    /// Updates the text overlay with the character name.
-    pub fn update_name(
-        &self,
-        display_config: &DisplayConfig,
-        character_name: &str,
-        dimensions: Dimensions,
-        font_renderer: &FontRenderer,
-    ) -> Result<()> {
-        // Calculate appropriate border size to preserve the hole
-        // We default to focused=false since this is usually called during initialization or generic updates
-        // However, if we are focused, the next border() call will correct it.
-        let border_size = self
-            .overlay
-            .calculate_border_size(display_config, character_name, false);
-
-        // Must clear content area explicitly now
-        self.overlay
-            .clear_content_area(dimensions, border_size)
-            .context(format!(
-                "Failed to clear content area for '{}'",
-                character_name
-            ))?;
-
-        Self::set_window_title(self.conn, self.atoms, self.window, character_name)?;
-
-        self.overlay.update_name(
-            display_config,
-            character_name,
-            dimensions,
-            border_size,
-            font_renderer,
-        )
+    pub fn update_window_title(&self, character_name: &str) -> Result<()> {
+        Self::set_window_title(self.conn, self.atoms, self.window, character_name)
     }
 
     /// Composites the text/border overlay on top of the thumbnail content.

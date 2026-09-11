@@ -3,6 +3,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::DaemonConfig;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum GamelogDiagnostic {
+    MissingDirectory,
+    InaccessibleDirectory(String),
+    NoLogFiles,
+    NoMatchingCharacters,
+    Monitoring,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GamelogStatus {
+    pub directory: Option<std::path::PathBuf>,
+    pub diagnostic: GamelogDiagnostic,
+    pub active_files: usize,
+}
+
 /// Messages sent from Manager to Daemon
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ConfigMessage {
@@ -58,6 +74,8 @@ pub enum DaemonMessage {
     Error(String),
     /// Generic status update for the Manager UI
     Status(String),
+    /// Current state of the local EVE Gamelog monitor.
+    GamelogStatus(GamelogStatus),
     RequestProfileSwitch(String),
     /// Periodic heartbeat (optional)
     Heartbeat,
@@ -66,3 +84,37 @@ pub enum DaemonMessage {
 /// The bootstrap payload sent over the initial server channel.
 /// Contains the channel for receiving config updates and the channel for sending status updates.
 pub type BootstrapMessage = (IpcSender<ConfigMessage>, IpcReceiver<DaemonMessage>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn daemon_config_binary_ipc_round_trip_preserves_alert_settings() {
+        let profile = crate::config::profile::Profile {
+            alert_damage_flash: false,
+            alert_decloak_audio: true,
+            ..Default::default()
+        };
+        let config = DaemonConfig {
+            profile,
+            character_thumbnails: HashMap::new(),
+            custom_source_thumbnails: HashMap::new(),
+            profile_hotkeys: HashMap::new(),
+            runtime_hidden: false,
+            gamelogs_directory: Some("/tmp/EVE/Gamelogs".into()),
+        };
+        let bytes = bincode::serialize(&ConfigMessage::Full(Box::new(config))).unwrap();
+        let decoded: ConfigMessage = bincode::deserialize(&bytes).unwrap();
+        let ConfigMessage::Full(received) = decoded else {
+            panic!("unexpected IPC variant");
+        };
+        assert!(!received.profile.alert_damage_flash);
+        assert!(received.profile.alert_decloak_audio);
+        assert_eq!(
+            received.gamelogs_directory,
+            Some("/tmp/EVE/Gamelogs".into())
+        );
+    }
+}

@@ -446,6 +446,7 @@ impl<'a> OverlayRenderer<'a> {
     /// 1. Skipped Indicator (Red X) - Bottom
     /// 2. Text (Name) - Middle
     /// 3. Border - Top (covers everything at edges)
+    #[allow(clippy::too_many_arguments)]
     pub fn draw_border(
         &self,
         config: &DisplayConfig,
@@ -454,6 +455,7 @@ impl<'a> OverlayRenderer<'a> {
         focused: bool,
         skipped: bool,
         font_renderer: &FontRenderer,
+        alert: Option<super::alert::AlertVisual>,
     ) -> Result<()> {
         // 1. Clear the entire overlay first (transparent background)
         self.conn
@@ -480,7 +482,9 @@ impl<'a> OverlayRenderer<'a> {
         }
 
         // Determine effective border size and color source
-        let effective_size = self.calculate_border_size(config, character_name, focused);
+        let effective_size = alert
+            .map(|a| a.border_size)
+            .unwrap_or_else(|| self.calculate_border_size(config, character_name, focused));
 
         // 3. Draw Text
         // We pass effective_size mainly if text positioning depended on it,
@@ -499,14 +503,24 @@ impl<'a> OverlayRenderer<'a> {
 
         // 4. Draw Border (Top Layer)
         // Only if size > 0 and enabled
-        let should_draw_border = if focused {
+        let should_draw_border = if alert.is_some() || focused {
             effective_size > 0
         } else {
             config.inactive_border_enabled && effective_size > 0
         };
 
+        // The banner sits below the alert border so damage retains visual priority
+        // at the lower edge when both alerts overlap.
+        if alert.is_some_and(|a| a.decloak_banner) {
+            self.draw_decloak_banner(dimensions, font_renderer)?;
+        }
+
         if should_draw_border {
-            let (fill_picture, temp_fill_id) =
+            let (fill_picture, temp_fill_id) = if let Some(alert) = alert {
+                let pid = self.conn.generate_id()?;
+                self.conn.render_create_solid_fill(pid, alert.color)?;
+                (pid, Some(pid))
+            } else {
                 if let Some(settings) = config.character_settings.get(character_name) {
                     let override_color_hex = if focused {
                         settings.override_active_border_color.as_ref()
@@ -535,7 +549,8 @@ impl<'a> OverlayRenderer<'a> {
                     (self.active_border_fill, None)
                 } else {
                     (self.inactive_border_fill, None)
-                };
+                }
+            };
 
             // Draw 4 strips for the border
             let w = dimensions.width as i16;
@@ -619,6 +634,7 @@ impl<'a> OverlayRenderer<'a> {
         character_name: &str,
         dimensions: Dimensions,
         font_renderer: &FontRenderer,
+        alert: Option<super::alert::AlertVisual>,
     ) -> Result<()> {
         self.draw_border(
             config,
@@ -627,6 +643,7 @@ impl<'a> OverlayRenderer<'a> {
             false,
             false,
             font_renderer,
+            alert,
         )
         .context(format!(
             "Failed to clear border for minimized window '{}'",
@@ -662,6 +679,133 @@ impl<'a> OverlayRenderer<'a> {
                 "Failed to render MINIMIZED text for '{}'",
                 character_name
             ))?;
+        Ok(())
+    }
+
+    fn draw_decloak_banner(
+        &self,
+        dimensions: Dimensions,
+        font_renderer: &FontRenderer,
+    ) -> Result<()> {
+        const LABEL: &str = "▞▞▞ DECLOAKED ▞▞▞";
+        let height = (font_renderer.size() as u16 + 8).min(dimensions.height);
+        let y = dimensions.height.saturating_sub(height) as i16;
+        let yellow = self.conn.generate_id()?;
+        self.conn.render_create_solid_fill(
+            yellow,
+            x11rb::protocol::render::Color {
+                red: 0xffff,
+                green: 0xcccc,
+                blue: 0,
+                alpha: 0xffff,
+            },
+        )?;
+        self.conn.render_composite(
+            PictOp::SRC,
+            yellow,
+            0u32,
+            self.overlay_picture,
+            0,
+            0,
+            0,
+            0,
+            0,
+            y,
+            dimensions.width,
+            height,
+        )?;
+        self.conn.render_free_picture(yellow)?;
+
+        if font_renderer.requires_direct_rendering() {
+            // Core X11 fonts cannot represent the block glyphs; retain the recognizable text.
+            let full_text = b"<<< DECLOAKED >>>";
+            let full_width = full_text.len() as i16 * (font_renderer.size() as i16 / 2).max(5);
+            let text: &[u8] = if full_width + 8 > dimensions.width as i16 {
+                b"DECLOAKED"
+            } else {
+                full_text
+            };
+            let gc = self.conn.generate_id()?;
+            self.conn.create_gc(
+                gc,
+                self.overlay_pixmap,
+                &CreateGCAux::new()
+                    .foreground(0xff000000)
+                    .background(0xffffcc00)
+                    .font(font_renderer.x11_font_id().unwrap_or(0)),
+            )?;
+            let approx_width = text.len() as i16 * (font_renderer.size() as i16 / 2).max(5);
+            let x = ((dimensions.width as i16 - approx_width) / 2).max(0);
+            self.conn
+                .image_text8(self.overlay_pixmap, gc, x, y + height as i16 - 4, text)?;
+            self.conn.free_gc(gc)?;
+        } else {
+            let rendered = font_renderer.render_text(LABEL, 0xff000000)?;
+            let available_width = dimensions.width.saturating_sub(8) as usize;
+            let scale = (available_width as f32 / rendered.width.max(1) as f32).min(1.0);
+            let fitted_width = (rendered.width as f32 * scale).round().max(1.0) as u16;
+            let fitted_height = (rendered.height as f32 * scale).round().max(1.0) as u16;
+            if rendered.width > 0 && fitted_width > 0 && fitted_height > 0 && rendered.height > 0 {
+                let pixmap = self.conn.generate_id()?;
+                self.conn.create_pixmap(
+                    x11::ARGB_DEPTH,
+                    pixmap,
+                    self.overlay_pixmap,
+                    rendered.width as u16,
+                    rendered.height as u16,
+                )?;
+                self.conn.put_image(
+                    ImageFormat::Z_PIXMAP,
+                    pixmap,
+                    self.overlay_gc,
+                    rendered.width as u16,
+                    rendered.height as u16,
+                    0,
+                    0,
+                    0,
+                    x11::ARGB_DEPTH,
+                    &rendered.data,
+                )?;
+                let picture = self.conn.generate_id()?;
+                self.conn.render_create_picture(
+                    picture,
+                    pixmap,
+                    self.formats.argb,
+                    &CreatePictureAux::new(),
+                )?;
+                self.conn
+                    .render_set_picture_filter(picture, b"bilinear", &[])?;
+                self.conn.render_set_picture_transform(
+                    picture,
+                    x11rb::protocol::render::Transform {
+                        matrix11: crate::x11::to_fixed(rendered.width as f32 / fitted_width as f32),
+                        matrix22: crate::x11::to_fixed(
+                            rendered.height as f32 / fitted_height as f32,
+                        ),
+                        matrix33: crate::x11::to_fixed(1.0),
+                        ..Default::default()
+                    },
+                )?;
+                let dest_x = ((dimensions.width - fitted_width) / 2) as i16;
+                let dest_y = y + ((height as i16 - fitted_height as i16) / 2).max(0);
+                self.conn.render_composite(
+                    PictOp::OVER,
+                    picture,
+                    0u32,
+                    self.overlay_picture,
+                    0,
+                    0,
+                    0,
+                    0,
+                    dest_x,
+                    dest_y,
+                    fitted_width,
+                    fitted_height,
+                )?;
+                self.conn.render_free_picture(picture)?;
+                self.conn.free_pixmap(pixmap)?;
+            }
+        }
         Ok(())
     }
 

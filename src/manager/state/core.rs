@@ -49,6 +49,7 @@ pub struct SharedState {
     pub ipc_healthy: bool,
     pub last_heartbeat: Instant,
     pub missed_heartbeats: u32,
+    pub gamelog_status: Option<crate::common::ipc::GamelogStatus>,
 }
 
 impl SharedState {
@@ -80,6 +81,7 @@ impl SharedState {
             ipc_healthy: false,
             last_heartbeat: Instant::now(),
             missed_heartbeats: 0,
+            gamelog_status: None,
         }
     }
 
@@ -138,6 +140,7 @@ impl SharedState {
                 custom_source_thumbnails,
                 profile_hotkeys,
                 runtime_hidden: false,
+                gamelogs_directory: self.config.global.gamelogs_directory.clone(),
             };
 
             if let Err(e) = tx.send(ConfigMessage::Full(Box::new(daemon_config))) {

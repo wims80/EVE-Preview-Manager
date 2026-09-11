@@ -1,3 +1,4 @@
+pub mod alerts_settings;
 pub mod behavior_settings;
 pub mod characters;
 pub mod header;

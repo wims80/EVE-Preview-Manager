@@ -46,6 +46,8 @@ pub struct DaemonConfig {
     pub profile_hotkeys: HashMap<crate::config::HotkeyBinding, String>,
     // Ephemeral state: used to temporarily hide previews via hotkey
     pub runtime_hidden: bool,
+    /// Optional global, machine-specific Gamelogs directory override.
+    pub gamelogs_directory: Option<std::path::PathBuf>,
 }
 
 impl DaemonConfig {
@@ -312,11 +314,15 @@ mod tests {
                 hotkey_toggle_skip: None,
                 hotkey_toggle_previews: None,
                 client_minimize_show_overlay: false,
+                alert_damage_flash: true,
+                alert_decloak: true,
+                alert_decloak_audio: false,
             },
             character_thumbnails: HashMap::new(),
             custom_source_thumbnails: HashMap::new(),
             profile_hotkeys: HashMap::new(),
             runtime_hidden: false,
+            gamelogs_directory: None,
         }
     }
 

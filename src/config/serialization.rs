@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use crate::common::types::CharacterSettings;
 use crate::config::profile::{
-    CustomWindowRule, CycleGroup, HotkeyBackendType, Profile,
+    CustomWindowRule, CycleGroup, HotkeyBackendType, Profile, default_alert_enabled,
     default_auto_save_thumbnail_positions, default_border_enabled, default_border_size,
     default_hotkey_backend, default_inactive_border_color, default_inactive_border_enabled,
     default_preserve_thumbnail_position_on_swap, default_profile_name, default_snap_threshold,
@@ -58,6 +58,12 @@ struct ProfileHelper {
     client_minimize_on_switch: bool,
     #[serde(default)]
     client_minimize_show_overlay: bool,
+    #[serde(default = "default_alert_enabled")]
+    alert_damage_flash: bool,
+    #[serde(default = "default_alert_enabled")]
+    alert_decloak: bool,
+    #[serde(default)]
+    alert_decloak_audio: bool,
     #[serde(default = "default_hotkey_backend")]
     hotkey_backend: HotkeyBackendType,
     #[serde(default)]
@@ -190,6 +196,9 @@ impl From<ProfileHelper> for Profile {
             thumbnail_preserve_position_on_swap: helper.thumbnail_preserve_position_on_swap,
             client_minimize_on_switch: helper.client_minimize_on_switch,
             client_minimize_show_overlay: helper.client_minimize_show_overlay,
+            alert_damage_flash: helper.alert_damage_flash,
+            alert_decloak: helper.alert_decloak,
+            alert_decloak_audio: helper.alert_decloak_audio,
             hotkey_backend: helper.hotkey_backend,
             hotkey_input_device: helper.hotkey_input_device,
             hotkey_logged_out_cycle: helper.hotkey_logged_out_cycle,
@@ -263,6 +272,9 @@ impl<'de> Deserialize<'de> for Profile {
                 pub client_minimize_on_switch: bool,
                 #[serde(default)]
                 pub client_minimize_show_overlay: bool,
+                pub alert_damage_flash: bool,
+                pub alert_decloak: bool,
+                pub alert_decloak_audio: bool,
                 #[serde(default = "default_hotkey_backend")]
                 pub hotkey_backend: HotkeyBackendType,
                 #[serde(default)]
@@ -352,6 +364,9 @@ impl<'de> Deserialize<'de> for Profile {
                 thumbnail_preserve_position_on_swap: p.thumbnail_preserve_position_on_swap,
                 client_minimize_on_switch: p.client_minimize_on_switch,
                 client_minimize_show_overlay: p.client_minimize_show_overlay,
+                alert_damage_flash: p.alert_damage_flash,
+                alert_decloak: p.alert_decloak,
+                alert_decloak_audio: p.alert_decloak_audio,
                 hotkey_backend: p.hotkey_backend,
                 hotkey_input_device: p.hotkey_input_device,
                 cycle_groups,

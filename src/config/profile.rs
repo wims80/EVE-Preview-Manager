@@ -184,6 +184,10 @@ pub struct GlobalSettings {
     pub minimize_to_tray: bool,
     #[serde(default)]
     pub start_minimized_to_tray: bool,
+    /// Machine-specific override for EVE's Gamelogs directory.
+    /// None uses the first auto-detected installation path.
+    #[serde(default)]
+    pub gamelogs_directory: Option<PathBuf>,
 }
 
 /// Profile - A complete set of visual and behavioral settings
@@ -230,6 +234,11 @@ pub struct Profile {
     /// When minimized, show "MINIMIZED" text overlay
     /// When minimized, show "MINIMIZED" text overlay
     pub client_minimize_show_overlay: bool,
+
+    // Gamelog-driven alerts
+    pub alert_damage_flash: bool,
+    pub alert_decloak: bool,
+    pub alert_decloak_audio: bool,
 
     // Hotkey settings (per-profile)
     /// Hotkey backend selection (X11 or evdev)
@@ -363,6 +372,10 @@ pub(crate) fn default_auto_save_thumbnail_positions() -> bool {
     true
 }
 
+pub(crate) fn default_alert_enabled() -> bool {
+    true
+}
+
 fn default_profiles() -> Vec<Profile> {
     vec![Profile {
         profile_name: crate::common::constants::defaults::behavior::PROFILE_NAME.to_string(),
@@ -392,6 +405,9 @@ fn default_profiles() -> Vec<Profile> {
         client_minimize_on_switch:
             crate::common::constants::defaults::behavior::MINIMIZE_CLIENTS_ON_SWITCH,
         client_minimize_show_overlay: false, // Default: off (clean minimized look)
+        alert_damage_flash: true,
+        alert_decloak: true,
+        alert_decloak_audio: false,
         hotkey_backend: default_hotkey_backend(), // Default: X11 (secure, no permissions)
         hotkey_input_device: None, // Default: no device selected (only used by evdev backend)
         hotkey_logged_out_cycle: false, // Default: off
@@ -420,6 +436,7 @@ impl Default for GlobalSettings {
             backup_retention_count: default_backup_retention_count(),
             minimize_to_tray: false,
             start_minimized_to_tray: false,
+            gamelogs_directory: None,
         }
     }
 }
@@ -681,6 +698,7 @@ mod tests {
         );
         assert!(!settings.minimize_to_tray);
         assert!(!settings.start_minimized_to_tray);
+        assert!(settings.gamelogs_directory.is_none());
     }
 
     #[test]
@@ -712,6 +730,9 @@ mod tests {
             profile.thumbnail_hide_not_focused,
             crate::common::constants::defaults::behavior::HIDE_WHEN_NO_FOCUS
         );
+        assert!(profile.alert_damage_flash);
+        assert!(profile.alert_decloak);
+        assert!(!profile.alert_decloak_audio);
     }
 
     #[test]
@@ -766,6 +787,9 @@ mod tests {
         // 1. Remove the new `cycle_groups` field to simulate an old config
         if let Some(obj) = json_value.as_object_mut() {
             obj.remove("cycle_groups");
+            obj.remove("alert_damage_flash");
+            obj.remove("alert_decloak");
+            obj.remove("alert_decloak_audio");
 
             // 2. Inject legacy fields
             obj.insert(
@@ -803,6 +827,9 @@ mod tests {
         assert_eq!(group.cycle_list[1], CycleSlot::Eve("B".to_string()));
         assert!(group.hotkey_forward.is_some());
         assert!(group.hotkey_backward.is_some());
+        assert!(profile.alert_damage_flash);
+        assert!(profile.alert_decloak);
+        assert!(!profile.alert_decloak_audio);
     }
 
     #[test]

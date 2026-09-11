@@ -23,6 +23,7 @@ let
     libxcursor
     libxrandr
     libxi
+    alsa-lib
   ];
 in
 
@@ -30,7 +31,7 @@ rustPlatform.buildRustPackage rec {
   pname = manifest.name;
   version = manifest.version;
 
-  cargoHash = "sha256-ox9TM0O+u2PsAsBpNlf8xMZkp4L8rACBUKvZOwecZ5U=";
+  cargoLock.lockFile = ./Cargo.lock;
 
   src = pkgs.lib.cleanSource ./.;
 
@@ -50,6 +51,7 @@ rustPlatform.buildRustPackage rec {
     install -Dm644 assets/com.evepreview.manager.desktop $out/share/applications/eve-preview-manager.desktop
     install -Dm644 assets/com.evepreview.manager.svg $out/share/icons/hicolor/scalable/apps/com.evepreview.manager.svg
     install -Dm644 assets/com.evepreview.manager.metainfo.xml $out/share/metainfo/com.evepreview.manager.metainfo.xml
+    install -Dm644 assets/decloaked.mp3 $out/share/eve-preview-manager/decloaked.mp3
   '';
 
   # Expose runtimeLibs for shell.nix to reuse

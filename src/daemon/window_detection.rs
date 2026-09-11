@@ -463,6 +463,7 @@ pub fn check_and_create_window<'a>(
         position,
         dimensions,
         preview_mode,
+        identity.is_eve,
     )
     .context(format!(
         "Failed to create thumbnail for '{}' (window {})",

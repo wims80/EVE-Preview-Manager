@@ -39,6 +39,14 @@ pub fn render(
 
             // Render in reverse order (Right -> Left)
 
+            if ui
+                .add(egui::Button::new("Alerts").selected(*active_tab == ManagerTab::Alerts))
+                .clicked()
+            {
+                *active_tab = ManagerTab::Alerts;
+            }
+            ui.add_space(5.0);
+
             // 5. Sources
             if ui
                 .add(egui::Button::new("Sources").selected(*active_tab == ManagerTab::Sources))

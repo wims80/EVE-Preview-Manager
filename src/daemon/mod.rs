@@ -1,9 +1,12 @@
 //! Daemon main loop and runtime initialization
 
+mod alert;
+mod audio;
 mod border_update;
 mod cycle_state;
 mod dispatcher;
 pub mod font;
+pub mod gamelog;
 mod main_loop;
 
 pub mod handlers;

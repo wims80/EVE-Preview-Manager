@@ -20,10 +20,12 @@ use crate::x11::{
 };
 use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
 
+use super::audio::AudioWorker;
 use super::border_update::sync_focused_borders;
 use super::cycle_state::CycleState;
 use super::dispatcher::{EventContext, handle_event};
 use super::font;
+use super::gamelog::{AlertKind, GamelogMonitor};
 use super::session_state::SessionState;
 use super::thumbnail::Thumbnail;
 
@@ -309,6 +311,21 @@ async fn run_event_loop(
 ) -> Result<()> {
     debug!("Daemon running (async)");
 
+    // All filesystem and audio device work stays off the X11/Tokio thread.
+    let (gamelog_tx, mut gamelog_rx) = mpsc::channel(32);
+    let (gamelog_monitor, _) =
+        GamelogMonitor::new(gamelog_tx, resources.config.gamelogs_directory.clone());
+    let gamelog = gamelog_monitor.start();
+    gamelog.set_tracked_characters(Some(
+        resources
+            .eve_clients
+            .values()
+            .filter(|thumbnail| thumbnail.is_eve)
+            .map(|thumbnail| thumbnail.character_name.clone()),
+    ));
+    let audio = AudioWorker::new();
+    let mut alerting_windows = HashSet::new();
+
     // Wrap IPC receiver in something async-friendly?
     // IpcReceiver is blocking. IPC-channel doesn't support async recv out of the box in a way that integrates with tokio::select! easily without a bridge.
     // We should spawn a thread to bridge IPC messages to a tokio channel.
@@ -334,6 +351,9 @@ async fn run_event_loop(
     // Heartbeat timer (3s interval) - skip missed ticks to prevent backlog
     let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(3));
     heartbeat_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    let mut alert_interval = tokio::time::interval(std::time::Duration::from_millis(100));
+    alert_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     // Timer for delayed thumbnail hiding (hysteresis)
     let hide_timer = tokio::time::sleep(tokio::time::Duration::from_secs(86400));
@@ -691,6 +711,72 @@ async fn run_event_loop(
                 resources.session.focus_loss_deadline = None;
             }
 
+            Some(event) = gamelog_rx.recv() => {
+                if event.source_generation != gamelog.generation() {
+                    continue;
+                }
+                let target = resources.eve_clients.iter().find_map(|(window, thumbnail)| {
+                    (thumbnail.is_eve && thumbnail.character_name.eq_ignore_ascii_case(&event.character)).then_some(*window)
+                });
+                if let Some(window) = target {
+                    let enabled = match event.kind {
+                        AlertKind::Damage => resources.config.profile.alert_damage_flash,
+                        AlertKind::Decloak => resources.config.profile.alert_decloak,
+                    };
+                    if enabled {
+                        let focused = match event.kind {
+                            AlertKind::Damage => false,
+                            AlertKind::Decloak => crate::x11::get_active_window(conn, screen, atoms)
+                                .ok()
+                                .flatten()
+                                .is_some_and(|active| {
+                                    active == window
+                                        || resources.eve_clients.get(&window)
+                                            .is_some_and(|thumbnail| active == thumbnail.window())
+                                }),
+                        };
+                        if !focused && let Some(thumbnail) = resources.eve_clients.get_mut(&window) {
+                            let now = std::time::Instant::now();
+                            match event.kind {
+                                AlertKind::Damage => { thumbnail.alerts.trigger_damage(now); }
+                                AlertKind::Decloak => {
+                                    thumbnail.alerts.trigger_decloak(now);
+                                    if resources.config.profile.alert_decloak_audio {
+                                        audio.trigger_decloak();
+                                    }
+                                }
+                            }
+                            alerting_windows.insert(window);
+                            let _ = thumbnail.redraw_overlay(
+                                &display_config,
+                                resources.cycle.is_skipped(&thumbnail.character_name),
+                                &font_renderer,
+                            );
+                        }
+                    }
+                }
+            }
+
+            _ = alert_interval.tick(), if !alerting_windows.is_empty() => {
+                let now = std::time::Instant::now();
+                let windows: Vec<_> = alerting_windows.iter().copied().collect();
+                for window in windows {
+                    if let Some(thumbnail) = resources.eve_clients.get_mut(&window) {
+                        let active = thumbnail.alerts.is_active(now);
+                        let _ = thumbnail.redraw_overlay(
+                            &display_config,
+                            resources.cycle.is_skipped(&thumbnail.character_name),
+                            &font_renderer,
+                        );
+                        if !active {
+                            alerting_windows.remove(&window);
+                        }
+                    } else {
+                        alerting_windows.remove(&window);
+                    }
+                }
+            }
+
             // 4. Send Heartbeat (Lower priority - can wait)
             _ = heartbeat_interval.tick() => {
                 if let Err(e) = status_tx.send(DaemonMessage::Heartbeat) {
@@ -698,6 +784,28 @@ async fn run_event_loop(
                     // If we can't send heartbeat, manager might be dead.
                     // We'll let the IPC config channel failure handle termination.
                 }
+                gamelog.set_tracked_characters(Some(
+                    resources.eve_clients.values()
+                        .filter(|thumbnail| thumbnail.is_eve)
+                        .map(|thumbnail| thumbnail.character_name.clone())
+                ));
+                let monitor_status = gamelog.status();
+                let diagnostic = if monitor_status.logs_dir.is_none() || !monitor_status.directory_exists {
+                    crate::common::ipc::GamelogDiagnostic::MissingDirectory
+                } else if let Some(error) = monitor_status.error {
+                    crate::common::ipc::GamelogDiagnostic::InaccessibleDirectory(error)
+                } else if monitor_status.file_count == 0 {
+                    crate::common::ipc::GamelogDiagnostic::NoLogFiles
+                } else if monitor_status.active_file_count == 0 {
+                    crate::common::ipc::GamelogDiagnostic::NoMatchingCharacters
+                } else {
+                    crate::common::ipc::GamelogDiagnostic::Monitoring
+                };
+                let _ = status_tx.send(DaemonMessage::GamelogStatus(crate::common::ipc::GamelogStatus {
+                    directory: monitor_status.logs_dir,
+                    diagnostic,
+                    active_files: monitor_status.active_file_count,
+                }));
             }
 
             // 4. Handle SIGUSR1 (Lower priority)
@@ -715,6 +823,16 @@ async fn run_event_loop(
 
                         // Update DaemonConfig
                         resources.config = new_config;
+                        gamelog.set_directory_override(resources.config.gamelogs_directory.clone());
+
+                        for thumbnail in resources.eve_clients.values_mut() {
+                            if !resources.config.profile.alert_damage_flash {
+                                thumbnail.alerts.clear_damage();
+                            }
+                            if !resources.config.profile.alert_decloak {
+                                thumbnail.alerts.clear_decloak();
+                            }
+                        }
 
                         // Only rebuild font renderer if font settings actually changed
                         let font_name = &resources.config.profile.thumbnail_text_font;
@@ -749,6 +867,11 @@ async fn run_event_loop(
                         display_config = resources.config.build_display_config();
                         for thumbnail in resources.eve_clients.values_mut() {
                              let _ = thumbnail.update(&display_config, &font_renderer);
+                             let _ = thumbnail.redraw_overlay(
+                                 &display_config,
+                                 resources.cycle.is_skipped(&thumbnail.character_name),
+                                 &font_renderer,
+                             );
                         }
 
                         info!("Full config updated");
@@ -804,6 +927,11 @@ async fn run_event_loop(
                             if let Err(e) = thumb.resize(width, height) {
                                 error!(name = %name, error = %e, "Failed to resize thumbnail");
                             }
+                            let _ = thumb.redraw_overlay(
+                                &display_config,
+                                resources.cycle.is_skipped(&thumb.character_name),
+                                &font_renderer,
+                            );
                             info!(
                                 name = %name,
                                 x = x,

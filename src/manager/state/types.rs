@@ -8,6 +8,7 @@ pub enum ManagerTab {
     Hotkeys,
     Characters,
     Sources,
+    Alerts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

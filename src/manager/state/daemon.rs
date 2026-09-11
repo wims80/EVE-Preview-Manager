@@ -160,6 +160,9 @@ impl SharedState {
                         color: crate::common::constants::manager_ui::STATUS_RUNNING,
                     });
                 }
+                DaemonMessage::GamelogStatus(status) => {
+                    self.gamelog_status = Some(status);
+                }
                 DaemonMessage::PositionChanged {
                     name,
                     x,

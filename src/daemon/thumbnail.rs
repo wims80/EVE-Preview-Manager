@@ -13,6 +13,7 @@ use crate::common::types::{Dimensions, Position, ThumbnailState};
 use crate::config::DisplayConfig;
 use crate::x11::AppContext;
 
+use super::alert::AlertState;
 use super::font::FontRenderer;
 use super::renderer::ThumbnailRenderer;
 use super::snapping::Rect;
@@ -41,6 +42,7 @@ pub struct Thumbnail<'a> {
     pub hidden: bool, // Tracks if hidden by "hide_when_no_focus"
     pub input_state: InputState,
     pub preview_mode: crate::common::types::PreviewMode,
+    pub is_eve: bool,
 
     // === Geometry (public, immutable after creation) ===
     pub dimensions: Dimensions,
@@ -49,6 +51,7 @@ pub struct Thumbnail<'a> {
 
     // === Backend ===
     renderer: ThumbnailRenderer<'a>,
+    pub alerts: AlertState,
 }
 
 impl<'a> Thumbnail<'a> {
@@ -73,6 +76,7 @@ impl<'a> Thumbnail<'a> {
         position: Option<Position>,
         dimensions: Dimensions,
         preview_mode: crate::common::types::PreviewMode,
+        is_eve: bool,
     ) -> Result<Self> {
         // Validate dimensions are non-zero
         if dimensions.width == 0 || dimensions.height == 0 {
@@ -129,9 +133,11 @@ impl<'a> Thumbnail<'a> {
             hidden: false,
             input_state: InputState::default(),
             preview_mode,
+            is_eve,
             dimensions,
             current_position: Position::new(x, y),
             renderer,
+            alerts: AlertState::default(),
         })
     }
 
@@ -249,6 +255,7 @@ impl<'a> Thumbnail<'a> {
             focused,
             skipped,
             font_renderer,
+            self.alerts.visual(std::time::Instant::now()),
         )
     }
 
@@ -267,6 +274,7 @@ impl<'a> Thumbnail<'a> {
                 &self.character_name,
                 self.dimensions,
                 font_renderer,
+                self.alerts.visual(std::time::Instant::now()),
             )?;
         }
         Ok(())
@@ -303,6 +311,7 @@ impl<'a> Thumbnail<'a> {
                     &self.character_name,
                     self.dimensions,
                     font_renderer,
+                    self.alerts.visual(std::time::Instant::now()),
                 )?;
             }
             _ => match &self.preview_mode {
@@ -340,7 +349,9 @@ impl<'a> Thumbnail<'a> {
         display_config: &DisplayConfig,
         font_renderer: &FontRenderer,
     ) -> Result<()> {
+        self.alerts.clear();
         self.character_name = new_name;
+        self.renderer.update_window_title(&self.character_name)?;
 
         // NOTE: Resize must precede update_name because it regenerates the overlay pixmap.
 
@@ -359,23 +370,62 @@ impl<'a> Thumbnail<'a> {
             self.preview_mode = settings.preview_mode;
         }
 
-        // Force update of name (and implicit repaint if visible)
-        self.renderer
-            .update_name(
+        self.redraw_overlay(display_config, false, font_renderer)
+            .context("Failed to repaint after character change")?;
+
+        Ok(())
+    }
+
+    /// Rebuild and composite the complete overlay using current focus and alert state.
+    pub fn redraw_overlay(
+        &self,
+        display_config: &DisplayConfig,
+        skipped: bool,
+        font_renderer: &FontRenderer,
+    ) -> Result<()> {
+        if matches!(self.state, ThumbnailState::Minimized) {
+            return self.renderer.minimized(
                 display_config,
                 &self.character_name,
                 self.dimensions,
                 font_renderer,
-            )
-            .context(format!(
-                "Failed to update name overlay to '{}'",
-                self.character_name
-            ))?;
-
-        self.update(display_config, font_renderer)
-            .context("Failed to repaint after character change")?;
-
-        Ok(())
+                self.alerts.visual(std::time::Instant::now()),
+            );
+        }
+        // Restore the destination from its real base before compositing the
+        // newly rebuilt transparent overlay. Without this, repeated alpha
+        // pulses accumulate and an expired banner remains burned into static
+        // or otherwise idle thumbnails.
+        match &self.preview_mode {
+            crate::common::types::PreviewMode::Live => {
+                self.renderer
+                    .capture(&self.character_name, self.dimensions)?;
+            }
+            crate::common::types::PreviewMode::Static { color } => {
+                let parsed = crate::manager::utils::parse_hex_color(color)
+                    .map_err(|_| anyhow::anyhow!("Invalid hex color: {}", color))?;
+                self.renderer.fill_static(
+                    &self.character_name,
+                    self.dimensions,
+                    x11rb::protocol::render::Color {
+                        red: parsed.r() as u16 * 257,
+                        green: parsed.g() as u16 * 257,
+                        blue: parsed.b() as u16 * 257,
+                        alpha: parsed.a() as u16 * 257,
+                    },
+                )?;
+            }
+        }
+        let focused = matches!(self.state, ThumbnailState::Normal { focused: true });
+        self.renderer.border(
+            display_config,
+            &self.character_name,
+            self.dimensions,
+            focused,
+            skipped,
+            font_renderer,
+            self.alerts.visual(std::time::Instant::now()),
+        )
     }
 
     /// Checks if a screen coordinate point is inside the thumbnail's bounds.

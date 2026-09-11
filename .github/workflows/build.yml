@@ -17,7 +17,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libfontconfig1-dev libdbus-1-dev \
+            pkg-config libfontconfig1-dev libdbus-1-dev libasound2-dev \
             libx11-dev libxext-dev libxrender-dev libxrandr-dev libxcomposite-dev \
             libxdamage-dev libxfixes-dev libxkbcommon-dev libwayland-dev \
             libegl1-mesa-dev libgl1-mesa-dev
@@ -47,7 +47,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libfontconfig1-dev libdbus-1-dev \
+            pkg-config libfontconfig1-dev libdbus-1-dev libasound2-dev \
             libx11-dev libxext-dev libxrender-dev libxrandr-dev libxcomposite-dev \
             libxdamage-dev libxfixes-dev libxkbcommon-dev libwayland-dev \
             libegl1-mesa-dev libgl1-mesa-dev

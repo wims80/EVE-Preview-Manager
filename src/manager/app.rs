@@ -403,6 +403,17 @@ impl eframe::App for ManagerApp {
                             state.config_status_message = None;
                         }
                     }
+                    ManagerTab::Alerts => {
+                        if components::alerts_settings::ui(
+                            ui,
+                            current_profile,
+                            &mut state.config.global,
+                            state.gamelog_status.as_ref(),
+                        ) {
+                            state.settings_changed = true;
+                            state.config_status_message = None;
+                        }
+                    }
                 }
             });
         });
