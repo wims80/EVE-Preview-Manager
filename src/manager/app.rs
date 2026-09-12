@@ -33,6 +33,7 @@ struct ManagerApp {
     visual_settings_state: components::visual_settings::VisualSettingsState,
     characters_state: components::characters::CharactersState,
     sources_state: components::sources::SourcesTab,
+    alerts_settings_state: components::alerts_settings::AlertsSettingsState,
     #[cfg(target_os = "linux")]
     shutdown_signal: std::sync::Arc<tokio::sync::Notify>,
     #[cfg(target_os = "linux")]
@@ -181,6 +182,7 @@ impl ManagerApp {
             visual_settings_state,
             characters_state,
             sources_state: components::sources::SourcesTab::default(),
+            alerts_settings_state: components::alerts_settings::AlertsSettingsState::default(),
             active_tab: ManagerTab::Behavior,
             minimize_to_tray_handled: false,
         };
@@ -194,6 +196,7 @@ impl ManagerApp {
             visual_settings_state,
             characters_state,
             sources_state: components::sources::SourcesTab::default(),
+            alerts_settings_state: components::alerts_settings::AlertsSettingsState::default(),
             active_tab: ManagerTab::Behavior,
             minimize_to_tray_handled: false,
         };
@@ -409,6 +412,11 @@ impl eframe::App for ManagerApp {
                             current_profile,
                             &mut state.config.global,
                             state.gamelog_status.as_ref(),
+                            &state.esi_health,
+                            state.esi_authorization_url.as_deref(),
+                            &mut state.esi_authorization_state,
+                            state.ipc_config_tx.as_ref(),
+                            &mut self.alerts_settings_state,
                         ) {
                             state.settings_changed = true;
                             state.config_status_message = None;

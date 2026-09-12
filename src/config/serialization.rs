@@ -89,6 +89,10 @@ struct ProfileHelper {
     custom_source_thumbnails: HashMap<String, CharacterSettings>,
     #[serde(default)]
     custom_windows: Vec<CustomWindowRule>,
+    #[serde(default = "default_alert_enabled")]
+    alert_implant_reminder: bool,
+    #[serde(default)]
+    implant_reminder_disabled_characters: Vec<u64>,
 
     // New field
     #[serde(default)]
@@ -212,6 +216,8 @@ impl From<ProfileHelper> for Profile {
             character_thumbnails,
             custom_source_thumbnails,
             custom_windows: helper.custom_windows,
+            alert_implant_reminder: helper.alert_implant_reminder,
+            implant_reminder_disabled_characters: helper.implant_reminder_disabled_characters,
         }
     }
 }
@@ -301,6 +307,12 @@ impl<'de> Deserialize<'de> for Profile {
                 pub custom_source_thumbnails: HashMap<String, CharacterSettings>,
                 #[serde(default)]
                 pub custom_windows: Vec<CustomWindowRule>,
+                // These fields are deliberately last: Profile's binary encoding is
+                // positional and same-build IPC relies on this exact order.
+                #[serde(default = "default_alert_enabled")]
+                pub alert_implant_reminder: bool,
+                #[serde(default)]
+                pub implant_reminder_disabled_characters: Vec<u64>,
             }
 
             #[derive(Deserialize)]
@@ -380,6 +392,8 @@ impl<'de> Deserialize<'de> for Profile {
                 character_thumbnails: p.character_thumbnails,
                 custom_source_thumbnails: p.custom_source_thumbnails,
                 custom_windows: p.custom_windows,
+                alert_implant_reminder: p.alert_implant_reminder,
+                implant_reminder_disabled_characters: p.implant_reminder_disabled_characters,
             })
         }
     }

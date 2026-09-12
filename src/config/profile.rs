@@ -188,6 +188,20 @@ pub struct GlobalSettings {
     /// None uses the first auto-detected installation path.
     #[serde(default)]
     pub gamelogs_directory: Option<PathBuf>,
+    /// Characters with an ESI authorization. Credentials are kept exclusively in
+    /// the platform keyring; this is deliberately metadata only.
+    #[serde(default)]
+    pub esi_accounts: Vec<EsiAccountMetadata>,
+}
+
+/// Non-secret identity metadata for an ESI-authorized character.
+///
+/// The daemon derives the keyring entry from `character_id`; no token material is
+/// persisted in the JSON configuration or sent to the Manager.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EsiAccountMetadata {
+    pub character_id: u64,
+    pub character_name: String,
 }
 
 /// Profile - A complete set of visual and behavioral settings
@@ -285,6 +299,11 @@ pub struct Profile {
 
     /// Custom window matching rules for external applications
     pub custom_windows: Vec<CustomWindowRule>,
+
+    // ESI implant docking reminder (per-profile).
+    pub alert_implant_reminder: bool,
+    /// Character IDs explicitly opted out of this profile's implant reminder.
+    pub implant_reminder_disabled_characters: Vec<u64>,
 }
 
 // Default value functions
@@ -422,6 +441,8 @@ fn default_profiles() -> Vec<Profile> {
         character_thumbnails: HashMap::new(),
         custom_source_thumbnails: HashMap::new(),
         custom_windows: Vec::new(),
+        alert_implant_reminder: true,
+        implant_reminder_disabled_characters: Vec::new(),
     }]
 }
 
@@ -437,6 +458,7 @@ impl Default for GlobalSettings {
             minimize_to_tray: false,
             start_minimized_to_tray: false,
             gamelogs_directory: None,
+            esi_accounts: Vec::new(),
         }
     }
 }
@@ -699,6 +721,7 @@ mod tests {
         assert!(!settings.minimize_to_tray);
         assert!(!settings.start_minimized_to_tray);
         assert!(settings.gamelogs_directory.is_none());
+        assert!(settings.esi_accounts.is_empty());
     }
 
     #[test]
@@ -733,6 +756,8 @@ mod tests {
         assert!(profile.alert_damage_flash);
         assert!(profile.alert_decloak);
         assert!(!profile.alert_decloak_audio);
+        assert!(profile.alert_implant_reminder);
+        assert!(profile.implant_reminder_disabled_characters.is_empty());
     }
 
     #[test]
@@ -790,6 +815,8 @@ mod tests {
             obj.remove("alert_damage_flash");
             obj.remove("alert_decloak");
             obj.remove("alert_decloak_audio");
+            obj.remove("alert_implant_reminder");
+            obj.remove("implant_reminder_disabled_characters");
 
             // 2. Inject legacy fields
             obj.insert(
@@ -830,6 +857,8 @@ mod tests {
         assert!(profile.alert_damage_flash);
         assert!(profile.alert_decloak);
         assert!(!profile.alert_decloak_audio);
+        assert!(profile.alert_implant_reminder);
+        assert!(profile.implant_reminder_disabled_characters.is_empty());
     }
 
     #[test]

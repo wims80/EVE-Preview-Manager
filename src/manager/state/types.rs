@@ -1,4 +1,5 @@
 use crate::common::constants::manager_ui::*;
+use crate::common::ipc::EsiHealthStatus;
 use eframe::egui;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -17,6 +18,19 @@ pub enum DaemonStatus {
     Running,
     Stopped,
     Crashed(Option<i32>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EsiAuthorizationAction {
+    Connect,
+    Reauthorize(u64),
+}
+
+#[derive(Debug, Default)]
+pub struct EsiAuthorizationUiState {
+    pub action: Option<EsiAuthorizationAction>,
+    pub cancelling: bool,
+    pub previous_health: Option<(Option<u64>, Option<EsiHealthStatus>)>,
 }
 
 impl DaemonStatus {

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use ipc_channel::ipc::IpcOneShotServer;
+use std::process::Command;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
@@ -14,6 +15,31 @@ use super::DaemonStatus;
 use super::SharedState;
 
 impl SharedState {
+    fn finish_esi_authorization_ui(&mut self) {
+        let was_cancelling = self.esi_authorization_state.cancelling;
+        let had_action = self.esi_authorization_state.action.take().is_some();
+        self.esi_authorization_state.cancelling = false;
+        let previous = self.esi_authorization_state.previous_health.take();
+
+        if had_action
+            && let Some((key, previous_status)) = previous
+            && (was_cancelling
+                || matches!(
+                    self.esi_health.get(&key),
+                    Some(
+                        crate::common::ipc::EsiHealthStatus::AwaitingAuthorization
+                            | crate::common::ipc::EsiHealthStatus::Authorizing
+                    )
+                ))
+        {
+            if let Some(status) = previous_status {
+                self.esi_health.insert(key, status);
+            } else {
+                self.esi_health.remove(&key);
+            }
+        }
+    }
+
     pub fn start_daemon(&mut self) -> Result<()> {
         if self.daemon.is_some() {
             return Ok(());
@@ -78,6 +104,8 @@ impl SharedState {
             self.ipc_config_tx = None;
             self.ipc_status_rx = None;
             self.daemon_status_rx = None;
+            self.esi_authorization_url = None;
+            self.finish_esi_authorization_ui();
         }
         Ok(())
     }
@@ -162,6 +190,71 @@ impl SharedState {
                 }
                 DaemonMessage::GamelogStatus(status) => {
                     self.gamelog_status = Some(status);
+                }
+                DaemonMessage::EsiAuthorizationUrl { url } => {
+                    match Command::new("xdg-open").arg(&url).spawn() {
+                        Ok(mut child) => {
+                            std::thread::spawn(move || match child.wait() {
+                                Ok(status) if !status.success() => {
+                                    warn!(
+                                        ?status,
+                                        "Browser launcher could not open ESI authorization page"
+                                    );
+                                }
+                                Err(error) => {
+                                    warn!(%error, "Failed to reap ESI browser launcher");
+                                }
+                                Ok(_) => {}
+                            });
+                        }
+                        Err(error) => warn!(%error, "Failed to open ESI authorization page"),
+                    }
+                    self.esi_authorization_url = Some(url);
+                }
+                DaemonMessage::EsiAuthorizationFinished => {
+                    self.esi_authorization_url = None;
+                    self.finish_esi_authorization_ui();
+                }
+                DaemonMessage::EsiAccountUpdated(account) => {
+                    self.esi_authorization_url = None;
+                    if let Some(existing) = self
+                        .config
+                        .global
+                        .esi_accounts
+                        .iter_mut()
+                        .find(|existing| existing.character_id == account.character_id)
+                    {
+                        if *existing != account {
+                            *existing = account;
+                            self.settings_changed = true;
+                        }
+                    } else {
+                        self.config.global.esi_accounts.push(account);
+                        self.settings_changed = true;
+                    }
+                    if let Err(error) = self.config.save().and_then(|_| self.sync_to_daemon()) {
+                        warn!(%error, "Failed to persist ESI account metadata");
+                    }
+                }
+                DaemonMessage::EsiAccountDisconnected { character_id } => {
+                    let before = self.config.global.esi_accounts.len();
+                    self.config
+                        .global
+                        .esi_accounts
+                        .retain(|account| account.character_id != character_id);
+                    self.esi_health.remove(&Some(character_id));
+                    if self.config.global.esi_accounts.len() != before {
+                        self.settings_changed = true;
+                        if let Err(error) = self.config.save().and_then(|_| self.sync_to_daemon()) {
+                            warn!(%error, "Failed to persist ESI account disconnection");
+                        }
+                    }
+                }
+                DaemonMessage::EsiHealth(health) => {
+                    if matches!(health.status, crate::common::ipc::EsiHealthStatus::Idle) {
+                        self.esi_authorization_url = None;
+                    }
+                    self.esi_health.insert(health.character_id, health.status);
                 }
                 DaemonMessage::PositionChanged {
                     name,
@@ -289,6 +382,8 @@ impl SharedState {
                     self.ipc_config_tx = None;
                     self.ipc_status_rx = None;
                     self.daemon_status_rx = None;
+                    self.esi_authorization_url = None;
+                    self.finish_esi_authorization_ui();
                 }
                 Ok(None) => {}
                 Err(err) => {
@@ -296,5 +391,46 @@ impl SharedState {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::ipc::{EsiCredentialStorage, EsiHealthStatus};
+    use crate::config::profile::Config;
+    use crate::manager::state::EsiAuthorizationAction;
+
+    #[test]
+    fn authorization_finish_restores_cancelled_row_status() {
+        let mut state = SharedState::new(Config::default(), false);
+        let previous = EsiHealthStatus::Authorized {
+            storage: EsiCredentialStorage::Secure,
+        };
+        state
+            .esi_health
+            .insert(Some(42), EsiHealthStatus::AwaitingAuthorization);
+        state.esi_authorization_state.action = Some(EsiAuthorizationAction::Reauthorize(42));
+        state.esi_authorization_state.cancelling = true;
+        state.esi_authorization_state.previous_health = Some((Some(42), Some(previous.clone())));
+
+        state.finish_esi_authorization_ui();
+
+        assert_eq!(state.esi_health.get(&Some(42)), Some(&previous));
+        assert!(state.esi_authorization_state.action.is_none());
+        assert!(!state.esi_authorization_state.cancelling);
+    }
+
+    #[test]
+    fn authorization_finish_preserves_terminal_error() {
+        let mut state = SharedState::new(Config::default(), false);
+        let error = EsiHealthStatus::Error("sanitized".into());
+        state.esi_health.insert(None, error.clone());
+        state.esi_authorization_state.action = Some(EsiAuthorizationAction::Connect);
+        state.esi_authorization_state.previous_health = Some((None, None));
+
+        state.finish_esi_authorization_ui();
+
+        assert_eq!(state.esi_health.get(&None), Some(&error));
     }
 }

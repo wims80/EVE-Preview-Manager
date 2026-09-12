@@ -3,8 +3,10 @@
 mod alert;
 mod audio;
 mod border_update;
+mod client_toast;
 mod cycle_state;
 mod dispatcher;
+mod esi;
 pub mod font;
 pub mod gamelog;
 mod main_loop;

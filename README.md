@@ -1,5 +1,9 @@
 # EVE Preview Manager
 
+Release builds require the ESI compliance configuration documented in
+[`ESI-COMPLIANCE.md`](ESI-COMPLIANCE.md). Development builds remain
+network-inert until those public application values are supplied.
+
 [Website](https://epm.sh) | [Discord](https://discord.gg/MxdW5NCjwV) | [Flathub](https://flathub.org/apps/com.evepreview.manager) | [AUR](https://aur.archlinux.org/packages/eve-preview-manager) | [FlakeHub](https://flakehub.com/flake/h0lylag/EVE-Preview-Manager)
 
 EVE Preview Manager is a Linux-native tool for managing multiple EVE Online clients, with live window previews, configurable hotkeys, and quick-swap profiles built for multiboxing.

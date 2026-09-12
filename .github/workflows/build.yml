@@ -40,6 +40,11 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     needs: check
+    env:
+      EPM_ESI_CLIENT_ID: ${{ vars.EPM_ESI_CLIENT_ID }}
+      EPM_ESI_CALLBACK: ${{ vars.EPM_ESI_CALLBACK }}
+      EPM_MAINTAINER_CONTACT: ${{ vars.EPM_MAINTAINER_CONTACT }}
+      EPM_ESI_COMPATIBILITY_DATE: ${{ vars.EPM_ESI_COMPATIBILITY_DATE }}
     steps:
       - uses: actions/checkout@v4
 

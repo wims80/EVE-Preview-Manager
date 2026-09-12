@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::process::Child;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -50,6 +51,11 @@ pub struct SharedState {
     pub last_heartbeat: Instant,
     pub missed_heartbeats: u32,
     pub gamelog_status: Option<crate::common::ipc::GamelogStatus>,
+    /// ESI worker state is intentionally metadata/status only. Tokens stay in
+    /// the daemon worker and keyring.
+    pub esi_authorization_url: Option<String>,
+    pub esi_authorization_state: super::EsiAuthorizationUiState,
+    pub esi_health: HashMap<Option<u64>, crate::common::ipc::EsiHealthStatus>,
 }
 
 impl SharedState {
@@ -82,6 +88,9 @@ impl SharedState {
             last_heartbeat: Instant::now(),
             missed_heartbeats: 0,
             gamelog_status: None,
+            esi_authorization_url: None,
+            esi_authorization_state: super::EsiAuthorizationUiState::default(),
+            esi_health: HashMap::new(),
         }
     }
 
@@ -141,6 +150,7 @@ impl SharedState {
                 profile_hotkeys,
                 runtime_hidden: false,
                 gamelogs_directory: self.config.global.gamelogs_directory.clone(),
+                esi_accounts: self.config.global.esi_accounts.clone(),
             };
 
             if let Err(e) = tx.send(ConfigMessage::Full(Box::new(daemon_config))) {

@@ -48,6 +48,9 @@ pub struct DaemonConfig {
     pub runtime_hidden: bool,
     /// Optional global, machine-specific Gamelogs directory override.
     pub gamelogs_directory: Option<std::path::PathBuf>,
+    /// Non-secret ESI account identity metadata. Refresh tokens remain in the
+    /// keyring and access tokens never leave the ESI worker.
+    pub esi_accounts: Vec<crate::config::profile::EsiAccountMetadata>,
 }
 
 impl DaemonConfig {
@@ -317,12 +320,15 @@ mod tests {
                 alert_damage_flash: true,
                 alert_decloak: true,
                 alert_decloak_audio: false,
+                alert_implant_reminder: true,
+                implant_reminder_disabled_characters: Vec::new(),
             },
             character_thumbnails: HashMap::new(),
             custom_source_thumbnails: HashMap::new(),
             profile_hotkeys: HashMap::new(),
             runtime_hidden: false,
             gamelogs_directory: None,
+            esi_accounts: Vec::new(),
         }
     }
 

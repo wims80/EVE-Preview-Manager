@@ -22,8 +22,10 @@ use ipc_channel::ipc::{self, IpcReceiver, IpcSender};
 
 use super::audio::AudioWorker;
 use super::border_update::sync_focused_borders;
+use super::client_toast::{ClientToast, ToastClick};
 use super::cycle_state::CycleState;
 use super::dispatcher::{EventContext, handle_event};
+use super::esi::{EsiWorker, Health, PublicAccount, WorkerCommand, WorkerConfig, WorkerEvent};
 use super::font;
 use super::gamelog::{AlertKind, GamelogMonitor};
 use super::session_state::SessionState;
@@ -48,6 +50,78 @@ struct DaemonResources<'a> {
     session: SessionState,
     cycle: CycleState,
     eve_clients: HashMap<Window, Thumbnail<'a>>,
+}
+
+fn build_esi_config(resources: &DaemonResources<'_>, generation: u64) -> WorkerConfig {
+    let mut live_characters: Vec<_> = resources
+        .eve_clients
+        .values()
+        .filter(|thumbnail| thumbnail.is_eve && !thumbnail.character_name.trim().is_empty())
+        .map(|thumbnail| thumbnail.character_name.clone())
+        .collect();
+    live_characters.sort_unstable_by_key(|name| name.to_lowercase());
+    WorkerConfig {
+        enabled: resources.config.profile.alert_implant_reminder,
+        disabled_characters: resources
+            .config
+            .profile
+            .implant_reminder_disabled_characters
+            .iter()
+            .copied()
+            .collect(),
+        accounts: resources
+            .config
+            .esi_accounts
+            .iter()
+            .map(|account| PublicAccount {
+                character_id: account.character_id,
+                character_name: account.character_name.clone(),
+            })
+            .collect(),
+        live_characters,
+        generation,
+    }
+}
+
+fn esi_window_identity(resources: &DaemonResources<'_>) -> Vec<(String, Window)> {
+    let mut identity: Vec<_> = resources
+        .eve_clients
+        .values()
+        .filter(|thumbnail| thumbnail.is_eve && !thumbnail.character_name.trim().is_empty())
+        .map(|thumbnail| (thumbnail.character_name.to_lowercase(), thumbnail.src()))
+        .collect();
+    identity.sort_unstable();
+    identity
+}
+
+fn ipc_esi_health(health: Health) -> crate::common::ipc::EsiHealthStatus {
+    use crate::common::ipc::{EsiCredentialStorage, EsiHealthStatus};
+    match health {
+        Health::Idle => EsiHealthStatus::Idle,
+        Health::AwaitingAuthorization => EsiHealthStatus::AwaitingAuthorization,
+        Health::Authorizing => EsiHealthStatus::Authorizing,
+        Health::CredentialStoredSecure => EsiHealthStatus::CredentialStoredSecure,
+        Health::AuthorizedSecure => EsiHealthStatus::Authorized {
+            storage: EsiCredentialStorage::Secure,
+        },
+        Health::AuthorizedSession => EsiHealthStatus::Authorized {
+            storage: EsiCredentialStorage::SessionOnly,
+        },
+        Health::MetadataUnavailable => EsiHealthStatus::SsoMetadataUnavailable,
+        Health::MissingScopes => EsiHealthStatus::MissingRequiredScopes,
+        Health::Revoked => EsiHealthStatus::AuthorizationRevoked,
+        Health::SecureStorageUnavailable => EsiHealthStatus::SecureStorageUnavailable,
+        Health::Backoff(seconds) => EsiHealthStatus::BackingOff {
+            retry_after_seconds: seconds,
+        },
+        Health::NoMatchingClient => EsiHealthStatus::NoMatchingLiveClient,
+        Health::RateLimited(seconds) => EsiHealthStatus::RateLimited {
+            retry_after_seconds: seconds,
+        },
+        Health::Error => {
+            EsiHealthStatus::Error("request failed without exposing response data".into())
+        }
+    }
 }
 
 fn initialize_x11() -> Result<(
@@ -325,6 +399,16 @@ async fn run_event_loop(
     ));
     let audio = AudioWorker::new();
     let mut alerting_windows = HashSet::new();
+    let esi = EsiWorker::spawn();
+    let mut esi_generation = 1_u64;
+    let mut implant_toast: Option<ClientToast> = None;
+    let mut snoozed_implant_characters = HashSet::<u64>::new();
+
+    let initial_esi_config = build_esi_config(&resources, esi_generation);
+    let mut last_esi_windows = esi_window_identity(&resources);
+    if !esi.send(WorkerCommand::Configure(initial_esi_config)) {
+        warn!("ESI worker unavailable during initialization");
+    }
 
     // Wrap IPC receiver in something async-friendly?
     // IpcReceiver is blocking. IPC-channel doesn't support async recv out of the box in a way that integrates with tokio::select! easily without a bridge.
@@ -377,6 +461,35 @@ async fn run_event_loop(
                 .poll_for_event()
                 .context("Failed to poll for X11 event")?
             {
+                if let x11rb::protocol::Event::ButtonPress(button) = &event
+                    && implant_toast
+                        .as_ref()
+                        .is_some_and(|toast| toast.is_button_target(button.event, button.child))
+                {
+                    let click = implant_toast
+                        .as_ref()
+                        .and_then(|toast| toast.click(button.detail));
+                    if click.is_some()
+                        && let Some(toast) = implant_toast.take()
+                    {
+                        debug!(
+                            window = toast.window(),
+                            button = button.detail,
+                            "Implant reminder toast dismissed by click"
+                        );
+                        toast.destroy(conn);
+                        if let Some(ToastClick::Snooze(character_id)) = click
+                            && !esi.send(WorkerCommand::Snooze(character_id))
+                        {
+                            warn!(character_id, "ESI snooze command channel full");
+                        }
+                        if let Some(ToastClick::Snooze(character_id)) = click {
+                            snoozed_implant_characters.insert(character_id);
+                        }
+                        let _ = conn.flush();
+                        continue;
+                    }
+                }
                 // Scope the mutable borrows for event handling
                 {
                     let mut context = EventContext {
@@ -398,6 +511,115 @@ async fn run_event_loop(
 
             // Flush any pending requests to X server
             let _ = ctx.conn.flush();
+        }
+
+        let current_esi_windows = esi_window_identity(&resources);
+        if current_esi_windows != last_esi_windows {
+            esi_generation = esi_generation.wrapping_add(1);
+            last_esi_windows = current_esi_windows;
+            if !esi.send(WorkerCommand::Configure(build_esi_config(
+                &resources,
+                esi_generation,
+            ))) {
+                warn!("ESI configuration channel full while updating live windows");
+            }
+        }
+
+        while let Ok(event) = esi.events.try_recv() {
+            match event {
+                WorkerEvent::AuthorizationUrl { epoch, url } => {
+                    if epoch != esi.epoch() {
+                        continue;
+                    }
+                    let _ = status_tx.send(DaemonMessage::EsiAuthorizationUrl { url });
+                }
+                WorkerEvent::AuthorizationFinished => {
+                    let _ = status_tx.send(DaemonMessage::EsiAuthorizationFinished);
+                }
+                WorkerEvent::AccountConnected { account, secure } => {
+                    let metadata = crate::config::profile::EsiAccountMetadata {
+                        character_id: account.character_id,
+                        character_name: account.character_name,
+                    };
+                    let _ = status_tx.send(DaemonMessage::EsiAccountUpdated(metadata));
+                    let _ = status_tx.send(DaemonMessage::EsiHealth(
+                        crate::common::ipc::EsiAccountHealth {
+                            character_id: Some(account.character_id),
+                            status: crate::common::ipc::EsiHealthStatus::Authorized {
+                                storage: if secure {
+                                    crate::common::ipc::EsiCredentialStorage::Secure
+                                } else {
+                                    crate::common::ipc::EsiCredentialStorage::SessionOnly
+                                },
+                            },
+                        },
+                    ));
+                }
+                WorkerEvent::AccountDisconnected { character_id } => {
+                    let _ = status_tx.send(DaemonMessage::EsiAccountDisconnected { character_id });
+                }
+                WorkerEvent::Health {
+                    character_id,
+                    health,
+                } => {
+                    let _ = status_tx.send(DaemonMessage::EsiHealth(
+                        crate::common::ipc::EsiAccountHealth {
+                            character_id,
+                            status: ipc_esi_health(health),
+                        },
+                    ));
+                }
+                WorkerEvent::Reminder {
+                    epoch,
+                    generation,
+                    character_id,
+                    character_name,
+                    implant_names,
+                } => {
+                    if epoch != esi.epoch()
+                        || generation != esi_generation
+                        || snoozed_implant_characters.contains(&character_id)
+                    {
+                        continue;
+                    }
+                    let target = resources
+                        .eve_clients
+                        .values()
+                        .find(|thumbnail| {
+                            thumbnail.is_eve
+                                && !thumbnail.character_name.is_empty()
+                                && thumbnail
+                                    .character_name
+                                    .trim()
+                                    .eq_ignore_ascii_case(character_name.trim())
+                                && !thumbnail.state.is_minimized()
+                        })
+                        .map(|thumbnail| thumbnail.src());
+                    let Some(target) = target else {
+                        warn!(
+                            character_id,
+                            "Implant reminder skipped: EVE window unavailable or minimized"
+                        );
+                        continue;
+                    };
+                    if let Some(previous) = implant_toast.take() {
+                        previous.destroy(conn);
+                    }
+                    match ClientToast::show(
+                        conn,
+                        screen,
+                        target,
+                        character_id,
+                        &character_name,
+                        &implant_names,
+                    ) {
+                        Ok(toast) => implant_toast = Some(toast),
+                        Err(error) => {
+                            warn!(character_id, error = %error, "Implant reminder toast unavailable")
+                        }
+                    }
+                }
+            }
         }
 
         // Sync allowed windows with backend
@@ -757,7 +979,7 @@ async fn run_event_loop(
                 }
             }
 
-            _ = alert_interval.tick(), if !alerting_windows.is_empty() => {
+            _ = alert_interval.tick(), if !alerting_windows.is_empty() || implant_toast.is_some() => {
                 let now = std::time::Instant::now();
                 let windows: Vec<_> = alerting_windows.iter().copied().collect();
                 for window in windows {
@@ -775,6 +997,9 @@ async fn run_event_loop(
                         alerting_windows.remove(&window);
                     }
                 }
+                let keep = implant_toast.as_ref().is_some_and(|toast| toast.tick(conn, std::time::Instant::now()).unwrap_or(false));
+                if !keep && let Some(toast) = implant_toast.take() { toast.destroy(conn); }
+                let _ = conn.flush();
             }
 
             // 4. Send Heartbeat (Lower priority - can wait)
@@ -806,6 +1031,9 @@ async fn run_event_loop(
                     diagnostic,
                     active_files: monitor_status.active_file_count,
                 }));
+                if !esi.send(WorkerCommand::Configure(build_esi_config(&resources, esi_generation))) {
+                    warn!("ESI configuration channel full during heartbeat");
+                }
             }
 
             // 4. Handle SIGUSR1 (Lower priority)
@@ -823,6 +1051,10 @@ async fn run_event_loop(
 
                         // Update DaemonConfig
                         resources.config = new_config;
+                        esi_generation = esi_generation.wrapping_add(1);
+                        if !esi.send(WorkerCommand::Configure(build_esi_config(&resources, esi_generation))) {
+                            warn!("ESI configuration command channel full");
+                        }
                         gamelog.set_directory_override(resources.config.gamelogs_directory.clone());
 
                         for thumbnail in resources.eve_clients.values_mut() {
@@ -943,7 +1175,15 @@ async fn run_event_loop(
                         } else {
                             debug!(name = %name, is_custom = is_custom, "ThumbnailMove ignored: character not tracked");
                         }
+                    },
+                    ConfigMessage::EsiAuthorize { session_only } => {
+                        if !esi.send(WorkerCommand::Authorize { session_only, expected_character_id: None }) { warn!("ESI authorize command channel full"); }
                     }
+                    ConfigMessage::EsiCancelAuthorization => { if !esi.send(WorkerCommand::CancelAuthorization) { warn!("ESI cancel command channel full"); } }
+                    ConfigMessage::EsiReauthorize { character_id, session_only } => {
+                        if !esi.send(WorkerCommand::Authorize { session_only, expected_character_id: Some(character_id) }) { warn!(character_id, "ESI reauthorize command channel full"); }
+                    }
+                    ConfigMessage::EsiDisconnect { character_id } => { if !esi.send(WorkerCommand::Disconnect(character_id)) { warn!(character_id, "ESI disconnect command channel full"); } }
                 }
             }
         }
@@ -976,9 +1216,15 @@ pub async fn run_daemon(ipc_server_name: String) -> Result<()> {
     debug!("Waiting for initial configuration...");
     let initial_config = match config_rx.recv() {
         Ok(ConfigMessage::Full(config)) => *config,
-        Ok(ConfigMessage::ThumbnailMove { .. }) => {
+        Ok(
+            ConfigMessage::ThumbnailMove { .. }
+            | ConfigMessage::EsiAuthorize { .. }
+            | ConfigMessage::EsiCancelAuthorization
+            | ConfigMessage::EsiReauthorize { .. }
+            | ConfigMessage::EsiDisconnect { .. },
+        ) => {
             return Err(anyhow::anyhow!(
-                "Expected Full config on startup, got ThumbnailMove"
+                "Expected Full config on startup, got control message"
             ));
         }
         Err(e) => return Err(anyhow::anyhow!("Failed to receive initial config: {}", e)),

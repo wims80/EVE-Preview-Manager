@@ -1,6 +1,10 @@
 {
   pkgs ? import <nixpkgs> { },
   rustToolchain ? null,
+  esiClientId ? "",
+  esiCallback ? "",
+  maintainerContact ? "",
+  esiCompatibilityDate ? "",
 }:
 
 let
@@ -24,6 +28,8 @@ let
     libxrandr
     libxi
     alsa-lib
+    dbus
+    xdg-utils
   ];
 in
 
@@ -34,6 +40,11 @@ rustPlatform.buildRustPackage rec {
   cargoLock.lockFile = ./Cargo.lock;
 
   src = pkgs.lib.cleanSource ./.;
+
+  EPM_ESI_CLIENT_ID = esiClientId;
+  EPM_ESI_CALLBACK = esiCallback;
+  EPM_MAINTAINER_CONTACT = maintainerContact;
+  EPM_ESI_COMPATIBILITY_DATE = esiCompatibilityDate;
 
   # Skip tests in build
   doCheck = false;
