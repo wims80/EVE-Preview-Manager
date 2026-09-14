@@ -222,6 +222,14 @@ impl eframe::App for ManagerApp {
         let old_profile_idx = state.selected_profile_idx;
         state.poll_daemon();
 
+        if self
+            .alerts_settings_state
+            .apply_folder_picker_result(&mut state.config.global)
+        {
+            state.settings_changed = true;
+            state.config_status_message = None;
+        }
+
         #[cfg(target_os = "linux")]
         if state.selected_profile_idx != old_profile_idx {
             self.update_signal.notify_one();
