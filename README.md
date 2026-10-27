@@ -85,6 +85,20 @@ Install from the [AUR](https://aur.archlinux.org/packages/eve-preview-manager) u
 paru -S eve-preview-manager
 ```
 
+### Arch Linux (this fork, makepkg)
+
+This fork's PKGBUILD lives on the [`pkgbuild`](https://github.com/wims80/EVE-Preview-Manager/tree/pkgbuild) branch. It builds `eve-preview-manager-git` from the latest commit on `main`:
+
+```bash
+git clone -b pkgbuild --single-branch https://github.com/wims80/EVE-Preview-Manager.git eve-preview-manager-git
+cd eve-preview-manager-git
+makepkg -si
+```
+
+If the AUR `eve-preview-manager` is installed, pacman offers to replace it; answer `y`. Re-run `makepkg -si` in the same directory to update.
+
+The ESI implant reminder needs your own EVE SSO application. Its values are read at build time from `~/.config/eve-preview-manager/esi.env`; without that file the package builds with ESI disabled. See the comments at the top of the PKGBUILD and [ESI-COMPLIANCE.md](ESI-COMPLIANCE.md).
+
 ### NixOS
 
 #### 1. Add Flake Input
