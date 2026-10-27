@@ -1281,12 +1281,14 @@ fn bounded_json<T: for<'de> Deserialize<'de>>(response: Response) -> Result<T, A
 fn normalize(name: &str) -> String {
     name.trim().to_lowercase()
 }
+// Build-time ESI config; if any value is missing or blank, ESI stays disabled.
 fn release_config() -> Option<(&'static str, &'static str, &'static str, &'static str)> {
+    let set = |value: Option<&'static str>| value.filter(|v| !v.trim().is_empty());
     Some((
-        option_env!("EPM_ESI_CLIENT_ID")?,
-        option_env!("EPM_ESI_CALLBACK")?,
-        option_env!("EPM_MAINTAINER_CONTACT")?,
-        option_env!("EPM_ESI_COMPATIBILITY_DATE")?,
+        set(option_env!("EPM_ESI_CLIENT_ID"))?,
+        set(option_env!("EPM_ESI_CALLBACK"))?,
+        set(option_env!("EPM_MAINTAINER_CONTACT"))?,
+        set(option_env!("EPM_ESI_COMPATIBILITY_DATE"))?,
     ))
 }
 fn keyring_available() -> bool {
@@ -1319,7 +1321,7 @@ fn esi_headers(access: &AccessToken, contact: &str, compatibility: &str) -> Resu
     headers.insert(
         USER_AGENT,
         HeaderValue::from_str(&format!(
-            "EvePreviewManager/{} ({}; +https://github.com/h0lylag/EVE-Preview-Manager)",
+            "EvePreviewManager/{} ({}; +https://github.com/wims80/EVE-Preview-Manager)",
             env!("CARGO_PKG_VERSION"),
             contact
         ))
@@ -1404,7 +1406,7 @@ mod tests {
         assert_eq!(
             headers[USER_AGENT],
             format!(
-                "EvePreviewManager/{} (maintainer@example.test; +https://github.com/h0lylag/EVE-Preview-Manager)",
+                "EvePreviewManager/{} (maintainer@example.test; +https://github.com/wims80/EVE-Preview-Manager)",
                 env!("CARGO_PKG_VERSION")
             )
         );

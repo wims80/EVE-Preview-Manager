@@ -1,7 +1,9 @@
 # ESI implant-reminder release configuration
 
-The implant reminder is inactive in development builds unless all four build
-variables below are set. Release builds deliberately fail when any is blank.
+The implant reminder is inactive unless all four build variables below are
+set at compile time; a build without them succeeds with ESI disabled. Keep the
+values out of the repository: the Arch package reads them from a local file
+(see the PKGBUILD on the `pkgbuild` branch).
 Values must describe an EVE Preview Manager-owned native/public SSO
 application; never borrow another application's client ID or add a secret.
 
